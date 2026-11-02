@@ -111,6 +111,7 @@ const baseTextDefaults = JSON.parse(JSON.stringify(state.defaults.text));
 let selectedElementId = null;
 let selectedPopoutId = null;
 let draggingElement = null;
+const pendingBackgroundUploads = new WeakMap();
 
 // Preload laurel SVG images for element frames
 const laurelImages = {};
@@ -1586,11 +1587,13 @@ function migrate3DPosition(screenshotSettings) {
 function reconstructBackgroundImage(background) {
     if (background && background.imageSrc && !background.image) {
         const img = new Image();
+        const imageSrc = background.imageSrc;
         img.onload = () => {
+            if (background.imageSrc !== imageSrc) return;
             background.image = img;
-            updateCanvas();
+            if (getBackground() === background) updateCanvas();
         };
-        img.src = background.imageSrc;
+        img.src = imageSrc;
     }
 }
 
@@ -2217,11 +2220,13 @@ function syncUIWithState() {
         // Reconstruct Image object if missing (e.g. after deep copy)
         if (!bg.image) {
             const img = new Image();
+            const imageSrc = bg.imageSrc;
             img.onload = () => {
-                setBackground('image', img);
-                updateCanvas();
+                if (bg.imageSrc !== imageSrc) return;
+                bg.image = img;
+                if (getBackground() === bg) updateCanvas();
             };
-            img.src = bg.imageSrc;
+            img.src = imageSrc;
         }
     } else {
         bgImagePreview.src = '';
@@ -4274,17 +4279,28 @@ function setupEventListeners() {
     bgImageUpload.addEventListener('click', () => bgImageInput.click());
     bgImageInput.addEventListener('change', (e) => {
         if (e.target.files[0]) {
+            const background = getBackground();
+            const upload = {};
+            pendingBackgroundUploads.set(background, upload);
             const reader = new FileReader();
             reader.onload = (event) => {
+                if (pendingBackgroundUploads.get(background) !== upload) return;
+                const imageSrc = event.target.result;
+                background.imageSrc = imageSrc;
+                background.image = null;
                 const img = new Image();
                 img.onload = () => {
-                    setBackground('image', img);
-                    setBackground('imageSrc', event.target.result);
-                    document.getElementById('bg-image-preview').src = event.target.result;
+                    if (pendingBackgroundUploads.get(background) !== upload || background.imageSrc !== imageSrc) return;
+                    background.image = img;
+                    if (getBackground() !== background) {
+                        saveState();
+                        return;
+                    }
+                    document.getElementById('bg-image-preview').src = imageSrc;
                     document.getElementById('bg-image-preview').style.display = 'block';
                     updateCanvas();
                 };
-                img.src = event.target.result;
+                img.src = imageSrc;
             };
             reader.readAsDataURL(e.target.files[0]);
         }
